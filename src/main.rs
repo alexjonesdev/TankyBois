@@ -54,7 +54,7 @@ fn main() {
             spawn_players,
             start_matchbox_socket,))
         .add_systems(Update, (
-            // my_cursor_system, 
+            // my_cursor_system,
             // player_movement_system,
             zoom_scalingmode,
             wait_for_players,
@@ -62,7 +62,7 @@ fn main() {
         .add_systems(ReadInputs, (
             my_cursor_system,
             read_local_inputs,))
-        .add_systems(GgrsSchedule, move_players2)
+        .add_systems(GgrsSchedule, move_players)
         .run();
 }
 
@@ -102,7 +102,9 @@ struct Turret {
 
 /// Target Reticle Component
 #[derive(Component)]
-struct Target;
+struct Target {
+    handle: usize,
+}
 
 /// Initializes the player shapes and camera
 fn setup(
@@ -155,56 +157,6 @@ fn setup(
             ..default()
         });
     }
-}
-
-/// Spawns the player sprite(s)
-fn spawn_player(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-) {
-    // Rectangle
-    commands.spawn((
-        SpriteBundle {
-            sprite: Sprite {
-                color: Color::rgb(0.25, 0.25, 0.75),
-                custom_size: Some(Vec2::new(2.0, 4.0)),
-                ..default()
-            },
-        transform: Transform::from_translation(Vec3::new(0., 0., 100.)),
-        ..default()
-        },
-        Player {
-            handle: 0,
-            movement_speed: 10.0,                  // meters per second
-            rotation_speed: f32::to_radians(180.0), // degrees per second
-        },
-    ));
-
-    // Triangle
-    commands.spawn((
-        MaterialMesh2dBundle {
-        mesh: meshes.add(shape::RegularPolygon::new(1., 3).into()).into(),
-        material: materials.add(ColorMaterial::from(Color::TURQUOISE)),
-        transform: Transform::from_translation(Vec3::new(0., 0., 101.)),
-        ..default()
-        },
-        Turret {
-            handle: 0,
-            rotation_speed: f32::to_radians(180.0), // degrees per second
-        },
-    ));
-
-    // Circle
-    commands.spawn((
-        MaterialMesh2dBundle {
-        mesh: meshes.add(shape::Circle::new(0.1).into()).into(),
-        material: materials.add(ColorMaterial::from(Color::PURPLE)),
-        transform: Transform::from_translation(Vec3::new(0., 0., 102.)),
-        ..default()
-    },
-        Target,
-    ));
 }
 
 /// Starts the matchbox socket to connect to the matchmaking server
@@ -442,38 +394,6 @@ fn read_local_inputs(
     commands.insert_resource(LocalInputs::<Config>(local_inputs));
 }
 
-fn move_players(
-    mut players: Query<(&mut Transform, &Player)>,
-    inputs: Res<PlayerInputs<Config>>,
-    time: Res<Time>,
-) {
-    for (mut transform, player) in &mut players {
-        let (input, _) = inputs[player.handle];
-
-        let mut direction = Vec2::ZERO;
-
-        if input & INPUT_FORWARD != 0 {
-            direction.y += 1.;
-        }
-        if input & INPUT_REVERSE != 0 {
-            direction.y -= 1.;
-        }
-        if input & INPUT_RIGHT != 0 {
-            direction.x += 1.;
-        }
-        if input & INPUT_LEFT != 0 {
-            direction.x -= 1.;
-        }
-        if direction == Vec2::ZERO {
-            continue;
-        }
-
-        let move_speed = 7.;
-        let move_delta = direction * move_speed * time.delta_seconds();
-        transform.translation += move_delta.extend(0.);
-    }
-}
-
 /// Spawns the player sprite(s)
 fn spawn_players(
     mut commands: Commands,
@@ -524,20 +444,24 @@ fn spawn_players(
             transform: Transform::from_translation(Vec3::new(0. + f32::from(i) *5., 0., 102.)),
             ..default()
         },
-            Target,
+            Target {
+                handle: usize::from(i),
+            },
         ));
         // .add_rollback();
     }
 }
 
-fn move_players2(
+fn move_players(
     inputs: Res<PlayerInputs<Config>>,
     time: Res<Time>,
     mut player_query: Query<(&Player, &mut Transform), With<Player>>,
     mut target_query: Query<(&Target, &mut Transform), Without<Player>>,
-    // mut turret_query: Query<(&Turret, &mut Transform), (Without<Player>, Without<Target>)>,
+    mut turret_query: Query<(&Turret, &mut Transform), (Without<Player>, Without<Target>)>,
     mouse_cords: Res<MyWorldCoords>,
 ) {
+    let mut body_pos = HashMap::new();
+
     // Body handling
     for (ship, mut ship_transform) in &mut player_query {
         let (input, _) = inputs[ship.handle];
@@ -573,12 +497,61 @@ fn move_players2(
         // bound the ship within the invisible level bounds
         let extents = Vec3::from((BOUNDS / 2.0, 0.0));
         ship_transform.translation = ship_transform.translation.min(extents).max(-extents);
+        body_pos.insert(ship.handle, ship_transform.translation);
+    }
 
-        // Target Handling
-        for (_target, mut tar_transform) in &mut target_query{
-            // let target_translation = tar_transform.translation.xy();
-            tar_transform.translation = Vec3::from((mouse_cords.0, 102.));
+    // Target Handling
+    // for (_target, mut tar_transform) in &mut target_query{
+    //     // let target_translation = tar_transform.translation.xy();
+    //     tar_transform.translation = Vec3::from((mouse_cords.0, 102.));
+    // }
+
+    // Turret Handling
+    for (turret, mut tur_transform) in &mut turret_query {
+        // If the body moved then first move the turret along with it
+        match body_pos.get(&turret.handle){
+            Some(&trans) => tur_transform.translation = Vec3::from((trans.truncate(), 101.)),
+            _ => (),
         }
+        // // tur_transform.translation = Vec3::from((body_pos.get(&turret.handle).truncate(), 101.));
+        // // get the enemy ship forward vector in 2D (already unit length)
+        // let turret_forward = (tur_transform.rotation * Vec3::Y).xy();
+
+        // // get the vector from the turret to the target in 2D and normalize it.
+        // let to_target = (target_translation - tur_transform.translation.xy()).normalize();
+
+        // // get the dot product between the enemy forward vector and the direction to the player.
+        // let forward_dot_target = turret_forward.dot(to_target);
+
+        // // if the dot product is approximately 1.0 then the turret is already facing the target and we can early out.
+        // if !((forward_dot_target - 1.0).abs() < f32::EPSILON) {
+        //     // get the right vector of the turret in 2D (already unit length)
+        //     let tur_right = (tur_transform.rotation * Vec3::X).xy();
+
+        //     // get the dot product of the enemy right vector and the direction to the player ship.
+        //     // if the dot product is negative them we need to rotate counter clockwise, if it is
+        //     // positive we need to rotate clockwise. Note that `copysign` will still return 1.0 if the
+        //     // dot product is 0.0 (because the player is directly behind the enemy, so perpendicular
+        //     // with the right vector).
+        //     let right_dot_target = tur_right.dot(to_target);
+
+        //     // determine the sign of rotation from the right dot target. We need to negate the sign
+        //     // here as the 2D bevy co-ordinate system rotates around +Z, which is pointing out of the
+        //     // screen. Due to the right hand rule, positive rotation around +Z is counter clockwise and
+        //     // negative is clockwise.
+        //     let rotation_sign = -f32::copysign(1.0, right_dot_target);
+
+        //     // limit rotation so we don't overshoot the target. We need to convert our dot product to
+        //     // an angle here so we can get an angle of rotation to clamp against.
+        //     let max_angle = forward_dot_target.clamp(-1.0, 1.0).acos(); // clamp acos for safety
+
+        //     // calculate angle of rotation with limit
+        //     let rotation_angle =
+        //         rotation_sign * (turret.rotation_speed * time.delta_seconds()).min(max_angle);
+
+        //     // rotate the turret to face the target
+        //     tur_transform.rotate_z(rotation_angle);
+        // }
     }
 }
 
