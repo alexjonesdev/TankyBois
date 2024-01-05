@@ -58,6 +58,7 @@ fn main() {
         .add_systems(Update, (
             // my_cursor_system,
             // player_movement_system,
+            draw_client_side,
             zoom_scalingmode,
             wait_for_players,
             bevy::window::close_on_esc))
@@ -187,7 +188,7 @@ fn spawn_players(
             },
         ))
         .add_rollback();
-
+        
         // Triangle
         commands.spawn((
             MaterialMesh2dBundle {
@@ -226,6 +227,23 @@ fn start_matchbox_socket(mut commands: Commands) {
     commands.insert_resource(MatchboxSocket::new_ggrs(room_url));
 }
 
+fn draw_client_side(
+    player_query: Query<(&Player, &Transform)>,
+    mut target_query: Query<(&Target, &mut Transform), Without<Player>>,
+    mouse_cords: Res<MyWorldCoords>,
+    mut gizmos: Gizmos,
+){
+    for (_target, mut tar_transform) in &mut target_query {
+        // let target_translation = tar_transform.translation.xy();
+        tar_transform.translation = Vec3::from((mouse_cords.0, 102.));
+    }
+
+    for (_ship, ship_transform) in &player_query {
+        let ship_pos = ship_transform.translation.xy();
+        gizmos.circle_2d(ship_pos, 10., Color::GREEN);
+    }
+}
+
 /// Allows for camera zoom
 fn zoom_scalingmode(
     mut query_camera: Query<&mut OrthographicProjection, With<MainCamera>>,
@@ -255,8 +273,8 @@ fn zoom_scalingmode(
             continue;
         }
 
-        println!("Current scale: {}", my_scale.0);
-        println!("Scroll (line units): vertical: {}, horizontal: {}", ev.y, ev.x);
+        // println!("Current scale: {}", my_scale.0);
+        // println!("Scroll (line units): vertical: {}, horizontal: {}", ev.y, ev.x);
     }
 }
 
@@ -332,6 +350,7 @@ fn read_local_inputs(
     mut commands: Commands,
     keys: Res<Input<KeyCode>>,
     local_players: Res<LocalPlayers>,
+    mb: Res<Input<MouseButton>>,
 ) {
     let mut local_inputs = HashMap::new();
 
@@ -350,7 +369,7 @@ fn read_local_inputs(
         if keys.any_pressed([KeyCode::Right, KeyCode::D]) {
             input |= INPUT_RIGHT;
         }
-        if keys.any_pressed([KeyCode::Space, KeyCode::Return]) {
+        if mb.any_pressed([MouseButton::Left]) {
             input |= INPUT_FIRE;
         }
 
