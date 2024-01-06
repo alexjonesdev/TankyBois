@@ -2,7 +2,7 @@
 use bevy::{prelude::*,
     render::camera::ScalingMode,
     sprite::MaterialMesh2dBundle,
-    window::{WindowResolution, PrimaryWindow, PresentMode, WindowMode},
+    window::{WindowResolution, PrimaryWindow},//, PresentMode, WindowMode},
     input::mouse::MouseWheel,
     utils::HashMap};
 use bevy_ggrs::*;
@@ -227,17 +227,11 @@ fn start_matchbox_socket(mut commands: Commands) {
     commands.insert_resource(MatchboxSocket::new_ggrs(room_url));
 }
 
+/// Draws UI elements you don't need other players to see
 fn draw_client_side(
     player_query: Query<(&Player, &Transform)>,
-    mut target_query: Query<(&Target, &mut Transform), Without<Player>>,
-    mouse_cords: Res<MyWorldCoords>,
     mut gizmos: Gizmos,
 ){
-    for (_target, mut tar_transform) in &mut target_query {
-        // let target_translation = tar_transform.translation.xy();
-        tar_transform.translation = Vec3::from((mouse_cords.0, 102.));
-    }
-
     for (_ship, ship_transform) in &player_query {
         let ship_pos = ship_transform.translation.xy();
         gizmos.circle_2d(ship_pos, 10., Color::GREEN);
@@ -385,9 +379,11 @@ fn move_players(
     mut player_query: Query<(&Player, &mut Transform), With<Player>>,
     mut target_query: Query<(&Target, &mut Transform), Without<Player>>,
     mut turret_query: Query<(&Turret, &mut Transform), (Without<Player>, Without<Target>)>,
+    local_players: Res<LocalPlayers>,
     mouse_cords: Res<MyWorldCoords>,
 ) {
     let mut body_pos = HashMap::new();
+    let mut tar_pos = HashMap::new();
 
     // Body handling
     for (ship, mut ship_transform) in &mut player_query {
@@ -428,10 +424,21 @@ fn move_players(
     }
 
     // Target Handling
-    // for (_target, mut tar_transform) in &mut target_query{
-    //     // let target_translation = tar_transform.translation.xy();
-    //     tar_transform.translation = Vec3::from((mouse_cords.0, 102.));
-    // }
+    for (target, mut tar_transform) in &mut target_query{
+        // If it's a local player update the target to the mouse position
+        if local_players.0.contains(&target.handle){
+            tar_transform.translation = Vec3::from((mouse_cords.0, 102.));
+        }
+
+        // Save the target position to be used for pointing the turret later
+        tar_pos.insert(target.handle, tar_transform.translation);
+
+        // let (input, _) = inputs[target.handle];
+        // match input{
+        //     0 => (),
+        //     _ => tar_transform.translation = Vec3::from((mouse_cords.0, 102.)),
+        // }
+    }
 
     // Turret Handling
     for (turret, mut tur_transform) in &mut turret_query {
@@ -440,45 +447,54 @@ fn move_players(
             Some(&trans) => tur_transform.translation = Vec3::from((trans.truncate(), 101.)),
             _ => (),
         }
-        // // tur_transform.translation = Vec3::from((body_pos.get(&turret.handle).truncate(), 101.));
-        // // get the enemy ship forward vector in 2D (already unit length)
-        // let turret_forward = (tur_transform.rotation * Vec3::Y).xy();
 
-        // // get the vector from the turret to the target in 2D and normalize it.
-        // let to_target = (target_translation - tur_transform.translation.xy()).normalize();
+        // Get the matching target for the given turret and save it's translation for later
+        let mut target_translation = Vec3::splat(0.);
 
-        // // get the dot product between the enemy forward vector and the direction to the player.
-        // let forward_dot_target = turret_forward.dot(to_target);
+        match tar_pos.get(&turret.handle){
+            Some(&trans) => target_translation = Vec3::from((trans.truncate(), 101.)),
+            _ => (),
+        }
 
-        // // if the dot product is approximately 1.0 then the turret is already facing the target and we can early out.
-        // if !((forward_dot_target - 1.0).abs() < f32::EPSILON) {
-        //     // get the right vector of the turret in 2D (already unit length)
-        //     let tur_right = (tur_transform.rotation * Vec3::X).xy();
+        // tur_transform.translation = Vec3::from((body_pos.get(&turret.handle).truncate(), 101.));
+        // get the enemy ship forward vector in 2D (already unit length)
+        let turret_forward = (tur_transform.rotation * Vec3::Y).xy();
 
-        //     // get the dot product of the enemy right vector and the direction to the player ship.
-        //     // if the dot product is negative them we need to rotate counter clockwise, if it is
-        //     // positive we need to rotate clockwise. Note that `copysign` will still return 1.0 if the
-        //     // dot product is 0.0 (because the player is directly behind the enemy, so perpendicular
-        //     // with the right vector).
-        //     let right_dot_target = tur_right.dot(to_target);
+        // get the vector from the turret to the target in 2D and normalize it.
+        let to_target = (target_translation.xy() - tur_transform.translation.xy()).normalize();
 
-        //     // determine the sign of rotation from the right dot target. We need to negate the sign
-        //     // here as the 2D bevy co-ordinate system rotates around +Z, which is pointing out of the
-        //     // screen. Due to the right hand rule, positive rotation around +Z is counter clockwise and
-        //     // negative is clockwise.
-        //     let rotation_sign = -f32::copysign(1.0, right_dot_target);
+        // get the dot product between the enemy forward vector and the direction to the player.
+        let forward_dot_target = turret_forward.dot(to_target);
 
-        //     // limit rotation so we don't overshoot the target. We need to convert our dot product to
-        //     // an angle here so we can get an angle of rotation to clamp against.
-        //     let max_angle = forward_dot_target.clamp(-1.0, 1.0).acos(); // clamp acos for safety
+        // if the dot product is approximately 1.0 then the turret is already facing the target and we can early out.
+        if !((forward_dot_target - 1.0).abs() < f32::EPSILON) {
+            // get the right vector of the turret in 2D (already unit length)
+            let tur_right = (tur_transform.rotation * Vec3::X).xy();
 
-        //     // calculate angle of rotation with limit
-        //     let rotation_angle =
-        //         rotation_sign * (turret.rotation_speed * time.delta_seconds()).min(max_angle);
+            // get the dot product of the enemy right vector and the direction to the player ship.
+            // if the dot product is negative them we need to rotate counter clockwise, if it is
+            // positive we need to rotate clockwise. Note that `copysign` will still return 1.0 if the
+            // dot product is 0.0 (because the player is directly behind the enemy, so perpendicular
+            // with the right vector).
+            let right_dot_target = tur_right.dot(to_target);
 
-        //     // rotate the turret to face the target
-        //     tur_transform.rotate_z(rotation_angle);
-        // }
+            // determine the sign of rotation from the right dot target. We need to negate the sign
+            // here as the 2D bevy co-ordinate system rotates around +Z, which is pointing out of the
+            // screen. Due to the right hand rule, positive rotation around +Z is counter clockwise and
+            // negative is clockwise.
+            let rotation_sign = -f32::copysign(1.0, right_dot_target);
+
+            // limit rotation so we don't overshoot the target. We need to convert our dot product to
+            // an angle here so we can get an angle of rotation to clamp against.
+            let max_angle = forward_dot_target.clamp(-1.0, 1.0).acos(); // clamp acos for safety
+
+            // calculate angle of rotation with limit
+            let rotation_angle =
+                rotation_sign * (turret.rotation_speed * time.delta_seconds()).min(max_angle);
+
+            // rotate the turret to face the target
+            tur_transform.rotate_z(rotation_angle);
+        }
     }
 }
 
